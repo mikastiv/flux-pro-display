@@ -1,0 +1,12 @@
+.{
+    .name = .antec_flux_pro_display,
+    .version = "0.1.0",
+    .fingerprint = 0x27f7c77878a03654,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
