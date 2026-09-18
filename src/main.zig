@@ -5,11 +5,25 @@ const vendor_id = 0x2022;
 const product_id = 0x0522;
 const endpoint_out = 0x3;
 
+const cpu_vendor_id: ?u16 = 0x1022;
+const cpu_product_id: ?u16 = 0x14e3;
+
+const gpu_vendor_id: ?u16 = 0x1002;
+const gpu_product_id: ?u16 = 0x7550;
+
 const hwmon_path = "/sys/class/hwmon";
+
 const amd_cpu_temp_driver = "k10temp";
 const amd_gpu_temp_driver = "amdgpu";
-const cpu_temp_label = "Tctl";
-const gpu_temp_label = "edge";
+const amd_cpu_temp_label = "Tctl";
+const amd_gpu_temp_label = "edge";
+
+const Device = struct {
+    vid: u16,
+    pid: u16,
+    name: []const u8,
+    hwmon: []const u8,
+};
 
 fn writeTemperature(writer: *std.Io.Writer, temp: f32) !void {
     const tens: u8 = @intFromFloat(temp / 10.0);
@@ -22,11 +36,8 @@ fn writeTemperature(writer: *std.Io.Writer, temp: f32) !void {
 }
 
 fn writePayload(writer: *std.Io.Writer, cpu_temp: f32, gpu_temp: f32) !void {
-    try writer.writeByte(85);
-    try writer.writeByte(170);
-    try writer.writeByte(1);
-    try writer.writeByte(1);
-    try writer.writeByte(6);
+    // hardcoded header
+    try writer.writeAll(&.{ 85, 170, 1, 1, 6 });
 
     try writeTemperature(writer, cpu_temp);
     try writeTemperature(writer, gpu_temp);
@@ -49,11 +60,10 @@ fn getHwmonPaths(allocator: std.mem.Allocator, io: std.Io, driver_name: []const 
     var result: std.ArrayList([]const u8) = .empty;
 
     var buf: [std.os.linux.PATH_MAX]u8 = undefined;
+    var name_buf: [64]u8 = undefined;
     while (try walker.next(io)) |entry| {
         const name_path = try std.fmt.bufPrint(&buf, "{s}/{s}/name", .{ hwmon_path, entry.basename });
-
-        const name_raw = try dir.readFileAlloc(io, name_path, allocator, .limited(64));
-        const name = std.mem.trim(u8, name_raw, &std.ascii.whitespace);
+        const name = try readFileAndTrimWhitespaces(io, dir, name_path, &name_buf);
 
         if (std.mem.eql(u8, name, driver_name)) {
             const path = try std.fmt.bufPrint(&buf, "{s}/{s}", .{ hwmon_path, entry.basename });
@@ -65,37 +75,97 @@ fn getHwmonPaths(allocator: std.mem.Allocator, io: std.Io, driver_name: []const 
     return result;
 }
 
-fn getTemperaturePath(
+fn readFileAndTrimWhitespaces(io: std.Io, dir: std.Io.Dir, path: []const u8, buf: []u8) ![]const u8 {
+    const raw = try dir.readFile(io, path, buf);
+    return std.mem.trim(u8, raw, &std.ascii.whitespace);
+}
+
+fn extractNumber(str: []const u8) !?u32 {
+    const numbers = "0123456789";
+    const start = std.mem.findAny(u8, str, numbers) orelse return null;
+    const end = std.mem.findLastAny(u8, str, numbers) orelse return null;
+
+    const result = try std.fmt.parseInt(u32, str[start .. end + 1], 10);
+    return result;
+}
+
+fn getAmdTemperaturePath(
     allocator: std.mem.Allocator,
     io: std.Io,
     dir_path: []const u8,
     temperature_name: []const u8,
-    comptime max_temperature_index: usize,
 ) !?[]const u8 {
-    const dir = try std.Io.Dir.openDirAbsolute(io, dir_path, .{});
+    const dir = try std.Io.Dir.openDirAbsolute(io, dir_path, .{ .iterate = true });
     defer dir.close(io);
 
-    var buf: [std.os.linux.PATH_MAX]u8 = undefined;
-    for (1..max_temperature_index + 1) |i| {
-        const label_path = try std.fmt.bufPrint(&buf, "temp{d}_label", .{i});
-        const name_raw = dir.readFileAlloc(io, label_path, allocator, .limited(64)) catch continue;
-        const name = std.mem.trim(u8, name_raw, &std.ascii.whitespace);
+    var walker = try dir.walk(allocator);
+
+    var buf: [64]u8 = undefined;
+    while (try walker.next(io)) |entry| {
+        if (!std.mem.startsWith(u8, entry.basename, "temp")) continue;
+        if (!std.mem.endsWith(u8, entry.basename, "_label")) continue;
+        const num = try extractNumber(entry.basename) orelse continue;
+
+        const name = try readFileAndTrimWhitespaces(io, dir, entry.basename, &buf);
         if (!std.mem.eql(u8, name, temperature_name)) continue;
 
-        const temperature_path = try std.fmt.allocPrint(allocator, "{s}/temp{d}_input", .{ dir_path, i });
+        const temperature_path = try std.fmt.allocPrint(allocator, "{s}/temp{d}_input", .{ dir_path, num });
         return temperature_path;
     }
 
     return null;
 }
 
-fn getTemperature(io: std.Io, path: []const u8) !f32 {
+fn getDeviceVendorIdAndProductId(io: std.Io, hwpath: []const u8) !struct { u16, u16 } {
+    const dir = try std.Io.Dir.openDirAbsolute(io, hwpath, .{});
+    defer dir.close(io);
+
     var buf: [32]u8 = undefined;
-    const temperature_raw = try std.Io.Dir.cwd().readFile(io, path, &buf);
-    const temperature_str = std.mem.trim(u8, temperature_raw, &std.ascii.whitespace);
+
+    const v_str = try readFileAndTrimWhitespaces(io, dir, "device/vendor", &buf);
+    const vid = try std.fmt.parseInt(u16, v_str, 0);
+
+    const p_str = try readFileAndTrimWhitespaces(io, dir, "device/device", &buf);
+    const pid = try std.fmt.parseInt(u16, p_str, 0);
+
+    return .{ vid, pid };
+}
+
+fn getDeviceName(allocator: std.mem.Allocator, pacc: ?*c.pci_access, vid: u16, pid: u16) !?[]const u8 {
+    var name_buf: [512]u8 = @splat(0);
+    const name_ptr = c.pci_lookup_name(pacc, &name_buf, name_buf.len, c.PCI_LOOKUP_DEVICE, vid, pid) orelse return null;
+    const name = std.mem.span(name_ptr);
+
+    return try allocator.dupe(u8, name);
+}
+
+fn getTemperature(io: std.Io, path: []const u8) !f32 {
+    var buf: [16]u8 = undefined;
+    const temperature_str = try readFileAndTrimWhitespaces(io, std.Io.Dir.cwd(), path, &buf);
     const temperature_milli_c = try std.fmt.parseInt(u32, temperature_str, 10);
     const temperature_f32: f32 = @floatFromInt(temperature_milli_c);
     return temperature_f32 / 1000.0;
+}
+
+fn getDeviceInfo(allocator: std.mem.Allocator, io: std.Io, pacc: ?*c.pci_access, hwmon: []const u8) !Device {
+    const vid, const pid = try getDeviceVendorIdAndProductId(io, hwmon);
+    const name = try getDeviceName(allocator, pacc, vid, pid) orelse "unknown";
+
+    return .{ .vid = vid, .pid = pid, .name = name, .hwmon = hwmon };
+}
+
+fn selectDevice(devices: []const Device, vid: ?u16, pid: ?u16) ?Device {
+    if (vid == null or pid == null) {
+        return null;
+    }
+
+    for (devices) |device| {
+        if (vid.? == device.vid and pid.? == device.pid) {
+            return device;
+        }
+    }
+
+    return null;
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -112,13 +182,13 @@ pub fn main(init: std.process.Init) !void {
     const handle = c.libusb_open_device_with_vid_pid(ctx, vendor_id, product_id) orelse return error.LibUsbOpenFailed;
     defer c.libusb_close(handle);
 
-    std.log.debug("opened usb device {x:0>4}:{x:0>4}", .{ vendor_id, product_id });
+    std.log.info("opened usb device {x:0>4}:{x:0>4}", .{ vendor_id, product_id });
 
     if (c.libusb_kernel_driver_active(handle, 0) == 1) {
-        std.log.debug("kernel driver active on interface 0", .{});
-        std.log.debug("detaching...", .{});
+        std.log.info("kernel driver active on interface 0", .{});
+        std.log.info("detaching...", .{});
         if (c.libusb_detach_kernel_driver(handle, 0) == 0) {
-            std.log.debug("kernel driver detached", .{});
+            std.log.info("kernel driver detached", .{});
         }
     }
 
@@ -128,15 +198,64 @@ pub fn main(init: std.process.Init) !void {
         return error.LibUsbClaimInterfaceFailed;
     }
 
-    std.log.debug("claimed interface 0", .{});
+    std.log.info("claimed interface 0", .{});
 
-    const amd_cpus = try getHwmonPaths(allocator, io, amd_cpu_temp_driver);
-    const amd_gpus = try getHwmonPaths(allocator, io, amd_gpu_temp_driver);
+    const amd_cpus_hwmon = try getHwmonPaths(allocator, io, amd_cpu_temp_driver);
+    const amd_gpus_hwmon = try getHwmonPaths(allocator, io, amd_gpu_temp_driver);
 
-    const cpu_path = try getTemperaturePath(allocator, io, amd_cpus.items[0], cpu_temp_label, 8) orelse return error.SensorNotFound;
-    const gpu_path = try getTemperaturePath(allocator, io, amd_gpus.items[0], gpu_temp_label, 8) orelse return error.SensorNotFound;
+    var amd_cpus: std.ArrayList(Device) = .empty;
+    var amd_gpus: std.ArrayList(Device) = .empty;
 
-    var data_buf: [256]u8 = undefined;
+    {
+        const pacc = c.pci_alloc();
+        c.pci_init(pacc);
+        defer c.pci_cleanup(pacc);
+
+        for (amd_cpus_hwmon.items) |cpu| {
+            const device = try getDeviceInfo(allocator, io, pacc, cpu);
+            try amd_cpus.append(allocator, device);
+        }
+
+        for (amd_gpus_hwmon.items) |gpu| {
+            const device = try getDeviceInfo(allocator, io, pacc, gpu);
+            try amd_gpus.append(allocator, device);
+        }
+    }
+
+    for (amd_cpus.items, 0..) |cpu, i| {
+        std.log.info("cpu {d}: {x:0>4}:{x:0>4} {s}", .{ i, cpu.vid, cpu.pid, cpu.name });
+    }
+    for (amd_gpus.items, 0..) |gpu, i| {
+        std.log.info("gpu {d}: {x:0>4}:{x:0>4} {s}", .{ i, gpu.vid, gpu.pid, gpu.name });
+    }
+
+    if (cpu_vendor_id == null or cpu_product_id == null) {
+        std.log.warn("wanted cpu not configured", .{});
+    }
+    const selected_cpu = blk: {
+        if (selectDevice(amd_cpus.items, cpu_vendor_id, cpu_product_id)) |device| {
+            break :blk device;
+        } else {
+            std.log.warn("wanted cpu not found", .{});
+            break :blk amd_cpus.items[0];
+        }
+    };
+    std.log.info("selected cpu: {x:0>4}:{x:0>4} {s}", .{ selected_cpu.vid, selected_cpu.pid, selected_cpu.name });
+
+    const selected_gpu = blk: {
+        if (selectDevice(amd_gpus.items, gpu_vendor_id, gpu_product_id)) |device| {
+            break :blk device;
+        } else {
+            std.log.warn("wanted gpu not found", .{});
+            break :blk amd_gpus.items[0];
+        }
+    };
+    std.log.info("selected gpu: {x:0>4}:{x:0>4} {s}", .{ selected_gpu.vid, selected_gpu.pid, selected_gpu.name });
+
+    const cpu_path = try getAmdTemperaturePath(allocator, io, selected_cpu.hwmon, amd_cpu_temp_label) orelse return error.SensorNotFound;
+    const gpu_path = try getAmdTemperaturePath(allocator, io, selected_gpu.hwmon, amd_gpu_temp_label) orelse return error.SensorNotFound;
+
+    var data_buf: [16]u8 = undefined;
     while (true) {
         var writer = std.Io.Writer.fixed(&data_buf);
 
@@ -154,6 +273,6 @@ pub fn main(init: std.process.Init) !void {
             std.log.err("transfer failed (err: {d})", .{result});
         }
 
-        try std.Io.sleep(io, .fromMilliseconds(2000), .real);
+        try std.Io.sleep(io, .fromMilliseconds(1500), .real);
     }
 }

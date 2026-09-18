@@ -10,6 +10,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/c.h"),
     });
     translate_c.linkSystemLibrary("usb-1.0", .{});
+    translate_c.linkSystemLibrary("pci", .{});
 
     const exe = b.addExecutable(.{
         .name = "antec_flux_pro_display",
@@ -24,6 +25,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.root_module.linkSystemLibrary("usb-1.0", .{});
+    exe.root_module.linkSystemLibrary("pci", .{});
 
     b.installArtifact(exe);
 

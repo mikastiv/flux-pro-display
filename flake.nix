@@ -27,11 +27,16 @@
           default = pkgs.mkShell {
             buildInputs = with pkgs; [
               libusb1
+              pciutils
             ];
             nativeBuildInputs = [
               zig
               zig.zls
             ];
+
+            shellHook = ''
+              export LD_LIBRARY_PATH="${pkgs.pciutils}/lib:$LD_LIBRARY_PATH"
+            '';
           };
         }
       );
