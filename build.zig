@@ -13,7 +13,7 @@ pub fn build(b: *std.Build) void {
     translate_c.linkSystemLibrary("pci", .{});
 
     const exe = b.addExecutable(.{
-        .name = "antec_flux_pro_display",
+        .name = "flux-pro-display",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,

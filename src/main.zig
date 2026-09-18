@@ -194,9 +194,9 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    var result = c.libusb_claim_interface(handle, 0);
-    if (result < 0) {
-        std.log.err("cannot claim interface 0 (err: {d})", .{result});
+    const claim_result = c.libusb_claim_interface(handle, 0);
+    if (claim_result < 0) {
+        std.log.err("cannot claim interface 0 (err: {d})", .{claim_result});
         return error.LibUsbClaimInterfaceFailed;
     }
 
@@ -261,7 +261,7 @@ pub fn main(init: std.process.Init) !void {
         const data = writer.buffered();
 
         var transfered: c_int = 0;
-        result = c.libusb_bulk_transfer(handle, endpoint_out, data.ptr, @intCast(data.len), &transfered, 1000);
+        const result = c.libusb_bulk_transfer(handle, endpoint_out, data.ptr, @intCast(data.len), &transfered, 1000);
         if (result == 0) {
             std.log.debug("transfered {d} bytes, expected {d} bytes", .{ transfered, data.len });
         } else {
