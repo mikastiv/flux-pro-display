@@ -8,6 +8,8 @@ const endpoint_out = 0x3;
 const hwmon_path = "/sys/class/hwmon";
 const amd_cpu_temp_driver = "k10temp";
 const amd_gpu_temp_driver = "amdgpu";
+const cpu_temp_label = "Tctl";
+const gpu_temp_label = "edge";
 
 fn writeTemperature(writer: *std.Io.Writer, temp: f32) !void {
     const tens: u8 = @intFromFloat(temp / 10.0);
@@ -63,6 +65,39 @@ fn getHwmonPaths(allocator: std.mem.Allocator, io: std.Io, driver_name: []const 
     return result;
 }
 
+fn getTemperaturePath(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    dir_path: []const u8,
+    temperature_name: []const u8,
+    comptime max_temperature_index: usize,
+) !?[]const u8 {
+    const dir = try std.Io.Dir.openDirAbsolute(io, dir_path, .{});
+    defer dir.close(io);
+
+    var buf: [std.os.linux.PATH_MAX]u8 = undefined;
+    for (1..max_temperature_index + 1) |i| {
+        const label_path = try std.fmt.bufPrint(&buf, "temp{d}_label", .{i});
+        const name_raw = dir.readFileAlloc(io, label_path, allocator, .limited(64)) catch continue;
+        const name = std.mem.trim(u8, name_raw, &std.ascii.whitespace);
+        if (!std.mem.eql(u8, name, temperature_name)) continue;
+
+        const temperature_path = try std.fmt.allocPrint(allocator, "{s}/temp{d}_input", .{ dir_path, i });
+        return temperature_path;
+    }
+
+    return null;
+}
+
+fn getTemperature(io: std.Io, path: []const u8) !f32 {
+    var buf: [32]u8 = undefined;
+    const temperature_raw = try std.Io.Dir.cwd().readFile(io, path, &buf);
+    const temperature_str = std.mem.trim(u8, temperature_raw, &std.ascii.whitespace);
+    const temperature_milli_c = try std.fmt.parseInt(u32, temperature_str, 10);
+    const temperature_f32: f32 = @floatFromInt(temperature_milli_c);
+    return temperature_f32 / 1000.0;
+}
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const io = init.io;
@@ -77,13 +112,13 @@ pub fn main(init: std.process.Init) !void {
     const handle = c.libusb_open_device_with_vid_pid(ctx, vendor_id, product_id) orelse return error.LibUsbOpenFailed;
     defer c.libusb_close(handle);
 
-    std.log.info("opened usb device {x:0>4}:{x:0>4}", .{ vendor_id, product_id });
+    std.log.debug("opened usb device {x:0>4}:{x:0>4}", .{ vendor_id, product_id });
 
     if (c.libusb_kernel_driver_active(handle, 0) == 1) {
-        std.log.info("kernel driver active on interface 0", .{});
-        std.log.info("detaching...", .{});
+        std.log.debug("kernel driver active on interface 0", .{});
+        std.log.debug("detaching...", .{});
         if (c.libusb_detach_kernel_driver(handle, 0) == 0) {
-            std.log.info("kernel driver detached", .{});
+            std.log.debug("kernel driver detached", .{});
         }
     }
 
@@ -93,34 +128,32 @@ pub fn main(init: std.process.Init) !void {
         return error.LibUsbClaimInterfaceFailed;
     }
 
-    std.log.info("claimed interface 0", .{});
+    std.log.debug("claimed interface 0", .{});
 
     const amd_cpus = try getHwmonPaths(allocator, io, amd_cpu_temp_driver);
     const amd_gpus = try getHwmonPaths(allocator, io, amd_gpu_temp_driver);
 
-    for (amd_cpus.items) |cpu| {
-        std.log.info("cpu: {s}", .{cpu});
-    }
-    for (amd_gpus.items) |gpu| {
-        std.log.info("gpu: {s}", .{gpu});
-    }
+    const cpu_path = try getTemperaturePath(allocator, io, amd_cpus.items[0], cpu_temp_label, 8) orelse return error.SensorNotFound;
+    const gpu_path = try getTemperaturePath(allocator, io, amd_gpus.items[0], gpu_temp_label, 8) orelse return error.SensorNotFound;
 
     var data_buf: [256]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&data_buf);
-
-    try writePayload(&writer, 42.0, 64.1);
-
-    const data = writer.buffered();
-
     while (true) {
+        var writer = std.Io.Writer.fixed(&data_buf);
+
+        const cpu_temp = try getTemperature(io, cpu_path);
+        const gpu_temp = try getTemperature(io, gpu_path);
+
+        try writePayload(&writer, @round(cpu_temp * 10.0) / 10.0, @round(gpu_temp * 10.0) / 10.0);
+        const data = writer.buffered();
+
         var transfered: c_int = 0;
         result = c.libusb_bulk_transfer(handle, endpoint_out, data.ptr, @intCast(data.len), &transfered, 1000);
         if (result == 0) {
-            std.log.info("transfered {d} bytes, expected {d} bytes", .{ transfered, data.len });
+            std.log.debug("transfered {d} bytes, expected {d} bytes", .{ transfered, data.len });
         } else {
             std.log.err("transfer failed (err: {d})", .{result});
         }
 
-        try std.Io.sleep(io, .fromMilliseconds(1000), .real);
+        try std.Io.sleep(io, .fromMilliseconds(2000), .real);
     }
 }
