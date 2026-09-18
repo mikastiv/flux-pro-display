@@ -5,11 +5,11 @@ const vendor_id = 0x2022;
 const product_id = 0x0522;
 const endpoint_out = 0x03;
 
-const cpu_vendor_id: ?u16 = 0x1022;
-const cpu_product_id: ?u16 = 0x14e3;
+var cpu_vendor_id: ?u16 = 0x1022;
+var cpu_product_id: ?u16 = 0x14e3;
 
-const gpu_vendor_id: ?u16 = 0x1002;
-const gpu_product_id: ?u16 = 0x7550;
+var gpu_vendor_id: ?u16 = 0x1002;
+var gpu_product_id: ?u16 = 0x7550;
 
 const hwmon_path = "/sys/class/hwmon";
 
@@ -170,9 +170,31 @@ fn selectDevice(devices: []const Device, vid: ?u16, pid: ?u16) ?Device {
     return null;
 }
 
+fn parseConfig(config: []const u8) !void {
+    var lines = std.mem.tokenizeScalar(u8, config, '\n');
+    while (lines.next()) |line| {
+        var it = std.mem.tokenizeScalar(u8, line, ' ');
+        const key = it.next().?;
+        const value = it.next().?;
+
+        if (std.mem.eql(u8, key, "cpu_vid")) {
+            cpu_vendor_id = try std.fmt.parseInt(u16, value, 0);
+        } else if (std.mem.eql(u8, key, "cpu_pid")) {
+            cpu_product_id = try std.fmt.parseInt(u16, value, 0);
+        } else if (std.mem.eql(u8, key, "gpu_vid")) {
+            gpu_vendor_id = try std.fmt.parseInt(u16, value, 0);
+        } else if (std.mem.eql(u8, key, "gpu_pid")) {
+            gpu_product_id = try std.fmt.parseInt(u16, value, 0);
+        }
+    }
+}
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const io = init.io;
+
+    const config = std.Io.Dir.readFileAlloc(std.Io.Dir.cwd(), io, "/etc/flux-pro-display/config", allocator, .limited(128)) catch null;
+    if (config) |conf| try parseConfig(conf);
 
     var ctx: ?*c.libusb_context = null;
 

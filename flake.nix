@@ -94,10 +94,10 @@
           package = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
 
           configFile = pkgs.writeText "flux-pro-display.conf" ''
-            cpu_vid = ${toString cfg.cpu_vid}
-            cpu_pid = ${toString cfg.cpu_pid}
-            gpu_vid = ${toString cfg.gpu_vid}
-            gpu_pid = ${toString cfg.gpu_pid}
+            cpu_vid ${toString cfg.cpu_vid}
+            cpu_pid ${toString cfg.cpu_pid}
+            gpu_vid ${toString cfg.gpu_vid}
+            gpu_pid ${toString cfg.gpu_pid}
           '';
         in
         {
