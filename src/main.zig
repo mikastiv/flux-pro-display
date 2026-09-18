@@ -3,7 +3,7 @@ const c = @import("c");
 
 const vendor_id = 0x2022;
 const product_id = 0x0522;
-const endpoint_out = 0x3;
+const endpoint_out = 0x03;
 
 const cpu_vendor_id: ?u16 = 0x1022;
 const cpu_product_id: ?u16 = 0x14e3;
@@ -165,6 +165,8 @@ fn selectDevice(devices: []const Device, vid: ?u16, pid: ?u16) ?Device {
         }
     }
 
+    std.log.warn("wanted device not found", .{});
+
     return null;
 }
 
@@ -203,8 +205,8 @@ pub fn main(init: std.process.Init) !void {
     const amd_cpus_hwmon = try getHwmonPaths(allocator, io, amd_cpu_temp_driver);
     const amd_gpus_hwmon = try getHwmonPaths(allocator, io, amd_gpu_temp_driver);
 
-    var amd_cpus: std.ArrayList(Device) = .empty;
-    var amd_gpus: std.ArrayList(Device) = .empty;
+    var cpus: std.ArrayList(Device) = .empty;
+    var gpus: std.ArrayList(Device) = .empty;
 
     {
         const pacc = c.pci_alloc();
@@ -213,43 +215,36 @@ pub fn main(init: std.process.Init) !void {
 
         for (amd_cpus_hwmon.items) |cpu| {
             const device = try getDeviceInfo(allocator, io, pacc, cpu);
-            try amd_cpus.append(allocator, device);
+            try cpus.append(allocator, device);
         }
 
         for (amd_gpus_hwmon.items) |gpu| {
             const device = try getDeviceInfo(allocator, io, pacc, gpu);
-            try amd_gpus.append(allocator, device);
+            try gpus.append(allocator, device);
         }
+
+        // TODO: intel cpus and nvidia gpus
     }
 
-    for (amd_cpus.items, 0..) |cpu, i| {
+    for (cpus.items, 0..) |cpu, i| {
         std.log.info("cpu {d}: {x:0>4}:{x:0>4} {s}", .{ i, cpu.vid, cpu.pid, cpu.name });
     }
-    for (amd_gpus.items, 0..) |gpu, i| {
+    for (gpus.items, 0..) |gpu, i| {
         std.log.info("gpu {d}: {x:0>4}:{x:0>4} {s}", .{ i, gpu.vid, gpu.pid, gpu.name });
     }
 
     if (cpu_vendor_id == null or cpu_product_id == null) {
         std.log.warn("wanted cpu not configured", .{});
     }
-    const selected_cpu = blk: {
-        if (selectDevice(amd_cpus.items, cpu_vendor_id, cpu_product_id)) |device| {
-            break :blk device;
-        } else {
-            std.log.warn("wanted cpu not found", .{});
-            break :blk amd_cpus.items[0];
-        }
-    };
+
+    if (gpu_vendor_id == null or gpu_product_id == null) {
+        std.log.warn("wanted gpu not configured", .{});
+    }
+
+    const selected_cpu = selectDevice(cpus.items, cpu_vendor_id, cpu_product_id) orelse cpus.items[0];
     std.log.info("selected cpu: {x:0>4}:{x:0>4} {s}", .{ selected_cpu.vid, selected_cpu.pid, selected_cpu.name });
 
-    const selected_gpu = blk: {
-        if (selectDevice(amd_gpus.items, gpu_vendor_id, gpu_product_id)) |device| {
-            break :blk device;
-        } else {
-            std.log.warn("wanted gpu not found", .{});
-            break :blk amd_gpus.items[0];
-        }
-    };
+    const selected_gpu = selectDevice(gpus.items, gpu_vendor_id, gpu_product_id) orelse gpus.items[0];
     std.log.info("selected gpu: {x:0>4}:{x:0>4} {s}", .{ selected_gpu.vid, selected_gpu.pid, selected_gpu.name });
 
     const cpu_path = try getAmdTemperaturePath(allocator, io, selected_cpu.hwmon, amd_cpu_temp_label) orelse return error.SensorNotFound;
@@ -273,6 +268,6 @@ pub fn main(init: std.process.Init) !void {
             std.log.err("transfer failed (err: {d})", .{result});
         }
 
-        try std.Io.sleep(io, .fromMilliseconds(1500), .real);
+        try std.Io.sleep(io, .fromSeconds(1), .real);
     }
 }
