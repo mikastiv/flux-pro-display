@@ -89,7 +89,7 @@ fn extractNumber(str: []const u8) !?u32 {
     return result;
 }
 
-fn getAmdTemperaturePath(
+fn getTemperaturePath(
     allocator: std.mem.Allocator,
     io: std.Io,
     dir_path: []const u8,
@@ -189,6 +189,12 @@ fn parseConfig(config: []const u8) !void {
     }
 }
 
+var running: std.atomic.Value(bool) = .init(true);
+
+fn handleSigterm(_: std.os.linux.SIG) callconv(.c) void {
+    running.store(false, .release);
+}
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const io = init.io;
@@ -221,6 +227,7 @@ pub fn main(init: std.process.Init) !void {
         std.log.err("cannot claim interface 0 (err: {d})", .{claim_result});
         return error.LibUsbClaimInterfaceFailed;
     }
+    defer _ = c.libusb_release_interface(handle, 0);
 
     std.log.info("claimed interface 0", .{});
 
@@ -269,11 +276,21 @@ pub fn main(init: std.process.Init) !void {
     const selected_gpu = selectDevice(gpus.items, gpu_vendor_id, gpu_product_id) orelse gpus.items[0];
     std.log.info("selected gpu: {x:0>4}:{x:0>4} {s}", .{ selected_gpu.vid, selected_gpu.pid, selected_gpu.name });
 
-    const cpu_path = try getAmdTemperaturePath(allocator, io, selected_cpu.hwmon, amd_cpu_temp_label) orelse return error.SensorNotFound;
-    const gpu_path = try getAmdTemperaturePath(allocator, io, selected_gpu.hwmon, amd_gpu_temp_label) orelse return error.SensorNotFound;
+    const cpu_path = try getTemperaturePath(allocator, io, selected_cpu.hwmon, amd_cpu_temp_label) orelse return error.SensorNotFound;
+    const gpu_path = try getTemperaturePath(allocator, io, selected_gpu.hwmon, amd_gpu_temp_label) orelse return error.SensorNotFound;
+
+    const action: std.os.linux.Sigaction = .{
+        .handler = .{ .handler = &handleSigterm },
+        .mask = std.os.linux.sigemptyset(),
+        .flags = 0,
+    };
+    if (std.os.linux.sigaction(.TERM, &action, null) < 0) {
+        std.log.err("failed to set signal action", .{});
+        return error.SigactionFailed;
+    }
 
     var data_buf: [16]u8 = undefined;
-    while (true) {
+    while (running.load(.acquire)) {
         var writer = std.Io.Writer.fixed(&data_buf);
 
         const cpu_temp = try getTemperature(io, cpu_path);

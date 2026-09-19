@@ -140,6 +140,8 @@
                 ExecStart = "${package}/bin/flux-pro-display";
                 Restart = "always";
                 RestartSec = 5;
+                StartLimitIntervalSec = 3;
+                StartLimitBurst = 5;
                 ProtectSystem = "strict";
                 ProtectHome = false;
                 PrivateTmp = true;
