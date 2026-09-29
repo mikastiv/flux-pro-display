@@ -143,8 +143,10 @@ fn getTemperature(io: std.Io, path: []const u8) !f32 {
     var buf: [16]u8 = undefined;
     const temperature_str = try readFileAndTrimWhitespaces(io, std.Io.Dir.cwd(), path, &buf);
     const temperature_milli_c = try std.fmt.parseInt(u32, temperature_str, 10);
-    const temperature_f32: f32 = @floatFromInt(temperature_milli_c);
-    return temperature_f32 / 1000.0;
+    const temperature = @as(f32, @floatFromInt(temperature_milli_c)) / 1000.0;
+
+    // NOTE: flux pro display expects one decimal value
+    return @round(temperature * 10.0) / 10.0;
 }
 
 fn getDeviceInfo(allocator: std.mem.Allocator, io: std.Io, pacc: ?*c.pci_access, hwmon: []const u8) !Device {
@@ -296,7 +298,7 @@ pub fn main(init: std.process.Init) !void {
         const cpu_temp = try getTemperature(io, cpu_path);
         const gpu_temp = try getTemperature(io, gpu_path);
 
-        try writePayload(&writer, @round(cpu_temp * 10.0) / 10.0, @round(gpu_temp * 10.0) / 10.0);
+        try writePayload(&writer, cpu_temp, gpu_temp);
         const data = writer.buffered();
 
         var transfered: c_int = 0;
