@@ -1,15 +1,16 @@
 const std = @import("std");
 const c = @import("c");
+const pci = @import("pci");
 
 const vendor_id = 0x2022;
 const product_id = 0x0522;
 const endpoint_out = 0x03;
 
-var cpu_vendor_id: ?u16 = 0x1022;
-var cpu_product_id: ?u16 = 0x14e3;
+var cpu_vendor_id: ?u16 = null;
+var cpu_product_id: ?u16 = null;
 
-var gpu_vendor_id: ?u16 = 0x1002;
-var gpu_product_id: ?u16 = 0x7550;
+var gpu_vendor_id: ?u16 = null;
+var gpu_product_id: ?u16 = null;
 
 const hwmon_path = "/sys/class/hwmon";
 
@@ -131,12 +132,14 @@ fn getDeviceVendorIdAndProductId(io: std.Io, hwpath: []const u8) !struct { u16, 
     return .{ vid, pid };
 }
 
-fn getDeviceName(allocator: std.mem.Allocator, pacc: ?*c.pci_access, vid: u16, pid: u16) !?[]const u8 {
-    var name_buf: [512]u8 = @splat(0);
-    const name_ptr = c.pci_lookup_name(pacc, &name_buf, name_buf.len, c.PCI_LOOKUP_DEVICE, vid, pid) orelse return null;
-    const name = std.mem.span(name_ptr);
+fn getDeviceName(vid: u16, pid: u16) !?[]const u8 {
+    for (pci.devices) |device| {
+        if (vid == device.vid and pid == device.pid) {
+            return device.name;
+        }
+    }
 
-    return try allocator.dupe(u8, name);
+    return null;
 }
 
 fn getTemperature(io: std.Io, path: []const u8) !f32 {
@@ -149,9 +152,9 @@ fn getTemperature(io: std.Io, path: []const u8) !f32 {
     return @round(temperature * 10.0) / 10.0;
 }
 
-fn getDeviceInfo(allocator: std.mem.Allocator, io: std.Io, pacc: ?*c.pci_access, hwmon: []const u8) !Device {
+fn getDeviceInfo(io: std.Io, hwmon: []const u8) !Device {
     const vid, const pid = try getDeviceVendorIdAndProductId(io, hwmon);
-    const name = try getDeviceName(allocator, pacc, vid, pid) orelse "unknown";
+    const name = try getDeviceName(vid, pid) orelse "unknown";
 
     return .{ .vid = vid, .pid = pid, .name = name, .hwmon = hwmon };
 }
@@ -167,7 +170,7 @@ fn selectDevice(devices: []const Device, vid: ?u16, pid: ?u16) ?Device {
         }
     }
 
-    std.log.warn("wanted device not found", .{});
+    std.log.warn("wanted device not found: {x:0>4}:{x:0>4}", .{ vid.?, pid.? });
 
     return null;
 }
@@ -235,26 +238,19 @@ pub fn main(init: std.process.Init) !void {
 
     const amd_cpus_hwmon = try getHwmonPaths(allocator, io, amd_cpu_temp_driver);
     const amd_gpus_hwmon = try getHwmonPaths(allocator, io, amd_gpu_temp_driver);
+    // TODO: intel cpus and nvidia gpus
 
     var cpus: std.ArrayList(Device) = .empty;
     var gpus: std.ArrayList(Device) = .empty;
 
-    {
-        const pacc = c.pci_alloc();
-        c.pci_init(pacc);
-        defer c.pci_cleanup(pacc);
+    for (amd_cpus_hwmon.items) |cpu| {
+        const device = try getDeviceInfo(io, cpu);
+        try cpus.append(allocator, device);
+    }
 
-        for (amd_cpus_hwmon.items) |cpu| {
-            const device = try getDeviceInfo(allocator, io, pacc, cpu);
-            try cpus.append(allocator, device);
-        }
-
-        for (amd_gpus_hwmon.items) |gpu| {
-            const device = try getDeviceInfo(allocator, io, pacc, gpu);
-            try gpus.append(allocator, device);
-        }
-
-        // TODO: intel cpus and nvidia gpus
+    for (amd_gpus_hwmon.items) |gpu| {
+        const device = try getDeviceInfo(io, gpu);
+        try gpus.append(allocator, device);
     }
 
     for (cpus.items, 0..) |cpu, i| {

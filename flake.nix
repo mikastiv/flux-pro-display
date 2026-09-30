@@ -29,7 +29,6 @@
           default = pkgs.mkShell {
             buildInputs = with pkgs; [
               libusb1
-              pciutils
             ];
             nativeBuildInputs = [
               zig
@@ -56,13 +55,13 @@
                   ./src
                   ./build.zig
                   ./build.zig.zon
+                  ./pci.ids
                 ]
               );
             };
 
             buildInputs = with pkgs; [
               libusb1
-              pciutils
               musl
             ];
             nativeBuildInputs = [
