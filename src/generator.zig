@@ -31,6 +31,8 @@ fn getEntryType(line: []const u8) EntryType {
 }
 
 fn escapeName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
+    if (std.mem.indexOfScalar(u8, name, '"') == null) return name;
+
     var escaped: std.ArrayList(u8) = .empty;
 
     for (name) |char| {
@@ -109,24 +111,48 @@ pub fn main(init: std.process.Init) !void {
     const writer = &file_writer.interface;
 
     try writer.writeAll(
-        \\const std = @import("std");
+        \\pub const Vendor = struct {
+        \\    id: u16,
+        \\    name: []const u8,
+        \\    devices: []const Device,
+        \\};
         \\
         \\pub const Device = struct {
-        \\    vid: u16,
-        \\    pid: u16,
+        \\    id: u16,
         \\    name: []const u8,
         \\};
         \\
-        \\pub const devices: []const Device = &.{
+        \\pub const vendors: []const Vendor = &.{
+        \\
     );
 
     for (vendors.items) |vendor| {
+        try writer.print(
+            \\    .{{
+            \\        .id = 0x{x:0>4},
+            \\        .name = "{s}",
+            \\        .devices = &.{{
+            \\
+        , .{
+            vendor.id,
+            try escapeName(allocator, vendor.name),
+        });
+
         for (vendor.devices.items) |device| {
-            const escaped = try escapeName(allocator, device.name);
-            try writer.print("    .{{ .vid = 0x{x:0>4}, .pid = 0x{x:0>4}, .name = \"{s}\" }},\n", .{
-                vendor.id, device.id, escaped,
+            try writer.print(
+                \\            .{{ .id = 0x{x:0>4}, .name = "{s}" }},
+                \\
+            , .{
+                device.id,
+                try escapeName(allocator, device.name),
             });
         }
+
+        try writer.writeAll(
+            \\        },
+            \\    },
+            \\
+        );
     }
 
     try writer.writeAll(

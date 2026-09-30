@@ -26,6 +26,8 @@ pub fn build(b: *std.Build) void {
     run_generator.addPrefixedFileArg("--input-file=", b.path("pci.ids"));
     const output = run_generator.addPrefixedOutputFileArg("--output-file=", "pci.zig");
 
+    _ = b.addInstallFileWithDir(output, .prefix, "pci.zig");
+
     const exe = b.addExecutable(.{
         .name = "flux-pro-display",
         .root_module = b.createModule(.{

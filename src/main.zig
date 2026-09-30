@@ -132,10 +132,14 @@ fn getDeviceVendorIdAndProductId(io: std.Io, hwpath: []const u8) !struct { u16, 
     return .{ vid, pid };
 }
 
-fn getDeviceName(vid: u16, pid: u16) !?[]const u8 {
-    for (pci.devices) |device| {
-        if (vid == device.vid and pid == device.pid) {
-            return device.name;
+fn getDeviceName(vid: u16, pid: u16) ?[]const u8 {
+    for (pci.vendors) |vendor| {
+        if (vid == vendor.id) {
+            for (vendor.devices) |device| {
+                if (device.id == pid) {
+                    return device.name;
+                }
+            }
         }
     }
 
@@ -154,7 +158,7 @@ fn getTemperature(io: std.Io, path: []const u8) !f32 {
 
 fn getDeviceInfo(io: std.Io, hwmon: []const u8) !Device {
     const vid, const pid = try getDeviceVendorIdAndProductId(io, hwmon);
-    const name = try getDeviceName(vid, pid) orelse "unknown";
+    const name = getDeviceName(vid, pid) orelse "unknown";
 
     return .{ .vid = vid, .pid = pid, .name = name, .hwmon = hwmon };
 }
