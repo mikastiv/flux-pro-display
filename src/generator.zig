@@ -103,6 +103,10 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    if (current_vendor) |vendor| {
+        try vendors.append(allocator, vendor);
+    }
+
     const output = try std.Io.Dir.cwd().createFile(io, output_path.?, .{});
     defer output.close(io);
 
