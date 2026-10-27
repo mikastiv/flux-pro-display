@@ -20,7 +20,7 @@
       forAllSystems =
         f:
         builtins.mapAttrs (
-          system: pkgs: f system pkgs zig-flake.packages.${system}.zig_0_16_0
+          system: pkgs: f system pkgs zig-flake.packages.${system}.zig_0_17_0
         ) nixpkgs.legacyPackages;
     in
     {

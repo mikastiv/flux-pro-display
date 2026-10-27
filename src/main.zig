@@ -212,7 +212,6 @@ pub fn main(init: std.process.Init) !void {
     if (config) |conf| try parseConfig(conf);
 
     var ctx: ?*c.libusb_context = null;
-
     if (c.libusb_init(&ctx) < 0) return error.LibUsbInitFailed;
     defer c.libusb_exit(ctx);
 
